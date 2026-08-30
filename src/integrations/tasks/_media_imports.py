@@ -111,7 +111,13 @@ def import_media(
     # landed. Recurring importers poll on a 2-hour schedule and usually import
     # nothing; firing an unscoped global reload each time was re-walking the whole
     # library (and holding the single celery-queue worker) for no reason.
-    if any(imported_counts.values()):
+    calendar_item_ids = imported_counts.get("calendar_item_ids")
+    if calendar_item_ids:
+        events.tasks.reload_calendar.delay(
+            user_id=user_id,
+            item_ids=calendar_item_ids,
+        )
+    elif any(imported_counts.values()):
         events.tasks.reload_calendar.delay()
     else:
         logger.info(

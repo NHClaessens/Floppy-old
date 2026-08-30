@@ -8,7 +8,9 @@ from django.test import TestCase, tag
 
 from app.models import (
     Anime,
+    Item,
     Manga,
+    Sources,
     Status,
 )
 from integrations.imports import (
@@ -57,6 +59,35 @@ class ImportAniList(TestCase):
             .history_date,
             datetime(2025, 6, 4, 10, 11, 17, tzinfo=UTC),
         )
+
+    @patch("requests.Session.post")
+    def test_new_mode_resyncs_existing_anime_progress(self, mock_request):
+        """Re-importing in new mode should refresh watched progress on existing rows."""
+        with Path(mock_path / "import_anilist.json").open() as file:
+            anilist_response = json.load(file)
+        mock_request.return_value.json.return_value = anilist_response
+
+        hyouka_item = Item.objects.create(
+            media_id="12189",
+            source=Sources.MAL.value,
+            media_type="anime",
+            title="Hyouka",
+        )
+        Anime.objects.create(
+            user=self.user,
+            item=hyouka_item,
+            status=Status.IN_PROGRESS.value,
+            progress=1,
+            score=6,
+        )
+
+        imported_counts, _ = anilist.importer(None, self.user, "new", "bloodthirstiness")
+
+        hyouka = Anime.objects.get(user=self.user, item__title="Hyouka")
+        self.assertEqual(hyouka.progress, 0)
+        self.assertEqual(hyouka.score, 8)
+        self.assertEqual(imported_counts["updated"], 1)
+        self.assertIn(hyouka_item.id, imported_counts["calendar_item_ids"])
 
     @patch("requests.Session.post")
     def test_import_anilist_private(self, mock_request):

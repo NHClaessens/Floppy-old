@@ -8,6 +8,19 @@ from integrations import plex as plex_api
 from integrations.imports import helpers
 
 ERROR_TITLE = "\n\n\n Couldn't import the following media: \n\n"
+IMPORT_COUNT_METRIC_KEYS = frozenset(
+    {
+        "created",
+        "updated",
+        "skipped",
+        "skipped_missing_ids",
+        "skipped_existing",
+        "skipped_unknown_type",
+        "skipped_other_user",
+        "music_unique_tracks",
+        "calendar_item_ids",
+    },
+)
 GOODREADS_IMPORT_TASK_NAME = "Import from Goodreads"
 LEGACY_GOODREADS_IMPORT_TASK_NAMES = (
     "Import from GoodReads",

@@ -124,6 +124,10 @@ class AniListImporter:
         # Track bulk creation lists for each media type
         self.bulk_media = defaultdict(list)
 
+        # Items seen in this import feed that should refresh episode totals
+        self.calendar_item_ids = set()
+        self.updated_count = 0
+
         logger.info(
             "Initialized AniList importer for user %s with mode %s",
             username,
@@ -251,6 +255,10 @@ class AniListImporter:
             media_type: len(media_list)
             for media_type, media_list in self.bulk_media.items()
         }
+        if self.updated_count:
+            imported_counts["updated"] = self.updated_count
+        if self.calendar_item_ids:
+            imported_counts["calendar_item_ids"] = sorted(self.calendar_item_ids)
 
         deduplicated_messages = "\n".join(dict.fromkeys(self.warnings))
         return imported_counts, deduplicated_messages
@@ -281,24 +289,29 @@ class AniListImporter:
             self.warnings.append(f"{title}: No matching MAL ID.")
             return
 
+        mal_id = str(content["media"]["idMal"])
+        existing = self.existing_media[media_type][Sources.MAL.value].get(mal_id)
+        if self.mode == "new" and existing is not None:
+            self.calendar_item_ids.add(existing.item_id)
+            if self._sync_existing_entry(existing, content):
+                self.updated_count += 1
+            return
+
         # Check if we should process this entry based on mode
         if not helpers.should_process_media(
             self.existing_media,
             self.to_delete,
             media_type,
             Sources.MAL.value,
-            str(content["media"]["idMal"]),
+            mal_id,
             self.mode,
         ):
             return
 
-        if content["status"] in ("CURRENT", "REPEATING"):
-            status = Status.IN_PROGRESS.value
-        else:
-            status = content["status"].capitalize()
+        status = self._anilist_status(content)
 
         item, _ = app.models.Item.objects.get_or_create(
-            media_id=str(content["media"]["idMal"]),
+            media_id=mal_id,
             source=Sources.MAL.value,
             media_type=media_type,
             defaults={
@@ -312,6 +325,7 @@ class AniListImporter:
                 "image": content["media"]["coverImage"]["large"],
             },
         )
+        self.calendar_item_ids.add(item.id)
         model = apps.get_model(app_label="app", model_name=media_type)
         updated_at = (
             timezone.now()
@@ -355,6 +369,39 @@ class AniListImporter:
         instance._history_date = updated_at
 
         self.bulk_media[media_type].append(instance)
+
+    def _anilist_status(self, content):
+        """Map an AniList list status to a Floppy status value."""
+        if content["status"] in ("CURRENT", "REPEATING"):
+            return Status.IN_PROGRESS.value
+        return content["status"].capitalize()
+
+    def _sync_existing_entry(self, existing, content):
+        """Sync progress, score, and status for an already-tracked entry.
+
+        Re-importing in "new" mode used to skip existing rows entirely, so
+        watched-episode progress and AniList-backed episode totals never moved
+        forward. Update the live row in place instead of recreating history.
+        """
+        status = self._anilist_status(content)
+        progress = content["progress"] or 0
+        score = content["score"]
+
+        changes = {}
+        if existing.progress != progress:
+            changes["progress"] = progress
+        if existing.score != score:
+            changes["score"] = score
+        if existing.status != status:
+            changes["status"] = status
+
+        if not changes:
+            return False
+
+        for field, value in changes.items():
+            setattr(existing, field, value)
+        existing.save(update_fields=list(changes.keys()))
+        return True
 
     def _get_date(self, date_dict):
         """Return date object from date dict."""
